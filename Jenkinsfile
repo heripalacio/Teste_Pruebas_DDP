@@ -2,46 +2,50 @@ pipeline {
     agent any
     
     triggers {
-        pollSCM('* * * * *')
+        // Configurar el trigger para que se dispare al recibir un POST
+        httpRequestTrigger(credentialsId: 'jenkins-credentials', 
+                           serverPort: 8080, 
+                           method: 'POST')
     }
     
     stages {
         stage('Compile') {
             steps {
-                sh 'mvn compile'
+                // Compilar el proyecto aquí
+                sh 'python compile_script.py'
             }
         }
         
-        stage('Run Tests') {
+        stage('Unit Test') {
             steps {
-                sh 'mvn test'
-            }
-            post {
-                always {
-                    junit '**/target/surefire-reports/*.xml'
+                // Ejecutar pruebas unitarias
+                sh 'python unit_test_script.py'
+                
+                // Verificar el resultado de las pruebas
+                script {
+                    def unitTestResult = sh(returnStatus: true, script: 'python check_unit_test_result.py')
+                    if (unitTestResult == 0) {
+                        echo 'Las pruebas unitarias pasaron correctamente.'
+                    } else {
+                        error 'Las pruebas unitarias fallaron. Consulta los detalles del error.'
+                    }
                 }
-                success {
-                    echo 'All tests passed!'
-                }
-                failure {
-                    error 'Some tests failed!'
-                }
-            }
-        }
-        
-        stage('Load Jacoco') {
-            steps {
-                sh 'mvn jacoco:report'
-                jacoco(execPattern: '**/target/jacoco.exec')
             }
         }
         
-        stage('Deploy to SonarQube') {
+        stage('Code Coverage') {
             steps {
-                withSonarQubeEnv('SonarQubePruebas') {
-                    sh 'mvn sonar:sonar'
-                }
+                // Cargar el reporte de cobertura (jacoco, por ejemplo)
+                sh 'python load_coverage_report.py'
+            }
+        }
+        
+        stage('SonarQube Analysis') {
+            steps {
+                // Desplegar la aplicación en SonarQube
+                sh 'python deploy_sonarqube.py'
             }
         }
     }
 }
+
