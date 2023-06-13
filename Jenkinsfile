@@ -43,7 +43,7 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 // Desplegar la aplicación en SonarQube
-                withSonarQubeEnv('SonarQubePruebas'){
+                withSonarQubeEnv('sonarQubePruebas'){
                     sh 'python deploy_sonarqube.py'
                 }
                 
