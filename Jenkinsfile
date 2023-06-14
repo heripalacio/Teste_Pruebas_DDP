@@ -1,54 +1,93 @@
-pipeline {
-    agent any
-    
-    triggers {
-        // Configurar el trigger para que se dispare al recibir un POST
-        httpRequestTrigger(credentialsId: 'jenkins-credentials', 
-                           serverPort: 8080, 
-                           method: 'POST')
-    }
-    
-    stages {
-        stage('Compile') {
-            steps {
-                // Compilar el proyecto aquí
-                sh 'python compile_script.py'
-            }
-        }
-        
-        stage('Unit Test') {
-            steps {
-                // Ejecutar pruebas unitarias
-                sh 'python unit_test_script.py'
-                
-                // Verificar el resultado de las pruebas
-                script {
-                    def unitTestResult = sh(returnStatus: true, script: 'python check_unit_test_result.py')
-                    if (unitTestResult == 0) {
-                        echo 'Las pruebas unitarias pasaron correctamente.'
-                    } else {
-                        error 'Las pruebas unitarias fallaron. Consulta los detalles del error.'
-                    }
-                }
-            }
-        }
-        
-        stage('Code Coverage') {
-            steps {
-                // Cargar el reporte de cobertura (jacoco, por ejemplo)
-                sh 'python load_coverage_report.py'
-            }
-        }
-        
-        stage('SonarQube Analysis') {
-            steps {
-                // Desplegar la aplicación en SonarQube
-                withSonarQubeEnv('SonarQubePruebas'){
-                    sh 'python deploy_sonarqube.py'
-                }
-                
-            }
-        }
-    }
+// Function to validate that the message returned from SonarQube is ok
+def qualityGateValidation(qg) {
+  if (qg.status != 'OK') {
+    // emailext body: "WARNING SANTI: Code coverage is lower than 80% in Pipeline ${BUILD_NUMBER}", subject: 'Error Sonar Scan,   Quality Gate', to: "${EMAIL_ADDRESS}"
+    return true
+  }
+  // emailext body: "CONGRATS SANTI: Code coverage is higher than 80%  in Pipeline ${BUILD_NUMBER} - SUCCESS", subject: 'Info - Correct Pipeline', to: "${EMAIL_ADDRESS}"
+  return false
 }
+pipeline {
+  agent any
 
+  tools {
+      nodejs 'nodejs'
+  }
+
+  environment {
+      // General Variables for Pipeline
+      PROJECT_ROOT = '/.'
+      EMAIL_ADDRESS = 'hpalaciom.1997@gmail.com'
+      REGISTRY = 'heripalacio17/docker-pirate-express'
+  }
+
+  stages {
+      stage('Hello') {
+        steps {
+          // First stage is a sample hello-world step to verify correct Jenkins Pipeline
+          echo 'Hello World, I am Happy'
+          echo 'This is my amazing Pipeline'
+        }
+      }
+      stage('Checkout') {
+        steps {
+        // Get Github repo using Github credentials (previously added to Jenkins credentials)
+        checkout([$class: 'GitSCM', branches: [[name: '*/main']], extensions: [], userRemoteConfigs: [[url: 'https://github.com/heripalacio/Teste_Pruebas_DDP.git']]])        }
+      }
+      stage('Install dependencies') {
+        steps {
+          sh 'npm --version'
+          sh "cd ${PROJECT_ROOT}; npm install"
+        }
+      }
+      stage('Unit tests') {
+        steps {
+          // Run unit tests
+          sh "cd ${PROJECT_ROOT}; npm run test"
+        }
+      }
+      stage('Generate coverage report') {
+        steps {
+          // Run code-coverage reports
+          sh "cd ${PROJECT_ROOT}; npm run coverage"
+        }
+      }
+      stage('scan') {
+          environment {
+            // Previously defined in the Jenkins "Global Tool Configuration"
+            scannerHome = tool 'sonar-scanner'
+          }
+          steps {
+            // "sonarqube" is the server configured in "Configure System"
+            withSonarQubeEnv('sonarqube') {
+              // Execute the SonarQube scanner with desired flags
+              sh "${scannerHome}/bin/sonar-scanner \
+                          -Dsonar.projectKey=SimpleExpressExample:Test \
+                          -Dsonar.projectName=SimpleExpressExample \
+                          -Dsonar.projectVersion=0.0.${BUILD_NUMBER} \
+                          -Dsonar.host.url=http://mysonarqube:9000 \
+                          -Dsonar.sources=./${PROJECT_ROOT}/.\
+                          -Dsonar.login=admin \
+                          -Dsonar.password=admin \
+                          -Dsonar.tests=./${PROJECT_ROOT}/."
+            }
+            timeout(time: 3, unit: 'MINUTES') {
+              // In case of SonarQube failure or direct timeout exceed, stop Pipeline
+              waitForQualityGate abortPipeline: qualityGateValidation(waitForQualityGate())
+            }
+          }
+      }
+      stage('Build docker-image') {
+        steps {
+          sh "cd ./${PROJECT_ROOT};docker build -t ${REGISTRY}:${BUILD_NUMBER} . "
+        }
+      }
+      stage('Deploy docker-image') {
+        steps {
+          // If the Dockerhub authentication stopped, do it again
+          sh 'docker login'
+          sh "docker push ${REGISTRY}:${BUILD_NUMBER}"
+        }
+      }
+  }
+}
